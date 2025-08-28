@@ -141,9 +141,9 @@ if (Platform.OS === "android") {
 }
 
 const MEAL_COLORS = {
-  breakfast: "#fff4e6", // matte pastel orange/peach
-  lunch: "#e7f7ef",     // matte mint/teal
-  dinner: "#eaeafb",    // matte lavender-blue
+  breakfast: "#f4cc8dff", // matte pastel orange/peach
+  lunch: "#bce4f5ff",     // matte mint/teal
+  dinner: "#d9d9feff",    // matte lavender-blue
 };
 
 export default function App() {
@@ -275,7 +275,7 @@ export default function App() {
 
     if (!mealReminders.length) {
       return (
-        <Text style={styles.minimalNote}>
+        <Text style={[styles.minimalNote, { textAlign: "center", width: "100%" }]}>
           No reminders scheduled for {mealLabel}.
         </Text>
       );
@@ -329,7 +329,22 @@ export default function App() {
 
   // Show permissions state at startup
   React.useEffect(() => {
-    // Removed permission status popup
+    // Show battery optimization notice on first app open
+    (async () => {
+      try {
+        const flag = await AsyncStorage.getItem("batteryOptimizationPrompted");
+        if (!flag) {
+          Alert.alert(
+            "Enable Reminders",
+            "To ensure DietRoutine can remind you reliably, please disable battery optimization for this app in your phone's settings.",
+            [{ text: "OK, Got It", onPress: async () => {
+              await AsyncStorage.setItem("batteryOptimizationPrompted", "yes");
+            }}]
+          );
+        }
+      } catch {}
+    })();
+
     refreshScheduledReminders();
     // Add listener to reload reminders when coming back to app
     const sub = Notifications.addNotificationReceivedListener(refreshScheduledReminders);
@@ -440,18 +455,25 @@ export default function App() {
     setTimeout(() => setModalStep("main"), 400);
   };
 
-  // Modal: after user clicked Yes for having meal
-  const onYesHadMeal = () => setModalStep("waterOffer");
+  // Track if water modal was triggered from Had Meal button
+  const [waterFromButton, setWaterFromButton] = useState(false);
+  // Track interval (minutes) selected for hydration reminders
+  const [waterInterval, setWaterInterval] = useState(120); // default 2 hours
 
-  // Water reminder until next meal logic
-  async function scheduleWaterReminders(currTab) {
+  // Modal: after user clicked Yes for having meal
+  const onYesHadMeal = () => {
+    setWaterFromButton(false);
+    setModalStep("waterOffer");
+  };
+
+  // Water reminder (hydration) logic; intervalMinutes: interval in minutes (default 120)
+  async function scheduleWaterReminders(currTab, intervalMinutes = null) {
     setIsWaterSetting(true);
     try {
-      // Remove only previous water reminders for this meal type (not all)
+      // Remove meal reminders for today (unchanged)
       try {
         const mealLabel = reminders.find(r => r.key === currTab).label.toLowerCase();
         const now = new Date();
-        const todayYMD = now.getFullYear() + "-" + (now.getMonth()+1) + "-" + now.getDate();
         const oldNotifs = await Notifications.getAllScheduledNotificationsAsync();
         for (const n of oldNotifs) {
           let t = n.content?.title?.toLowerCase?.() || "";
@@ -473,16 +495,15 @@ export default function App() {
             await Notifications.cancelScheduledNotificationAsync(n.identifier);
           }
         }
-      } catch (e) {
-        // Fail silently
-      }
+      } catch (e) {}
 
-      // Always schedule two hydration reminders: +2h and +4h from now (independent of meal end time)
+      // Schedule two hydration reminders at user-selected interval (default to 2h)
+      let interval = intervalMinutes ?? waterInterval ?? 120; // fallback to state/default
       let now = new Date();
       let timesDebug = [];
       let count = 0;
-      for (let hAdd of [2,4]) {
-        let dt = new Date(now.getTime() + hAdd*60*60*1000);
+      for (let x = 1; x <= 2; ++x) {
+        let dt = new Date(now.getTime() + x * interval * 60 * 1000);
         await trapSafeScheduleNotificationAsync({
           content: {
             title: "Hydration Reminder",
@@ -701,7 +722,11 @@ function trapSafeScheduleNotificationAsync(opts) {
           <View style={{ alignItems: "center", marginBottom: 12 }}>
             <Button
               title={isWaterSetting ? "Setting..." : "Had Meal (Hydration)"}
-              onPress={() => scheduleWaterReminders(activeTab)}
+              onPress={() => {
+                setWaterFromButton(true);
+                setModalStep("waterOffer");
+                setModalVisible(true);
+              }}
               disabled={isWaterSetting}
             />
           </View>
@@ -723,7 +748,7 @@ function trapSafeScheduleNotificationAsync(opts) {
             <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", width: '100%' }}>
               <Text style={styles.reminderListLabel}>Reminders in Range:</Text>
               <TouchableOpacity
-                onPress={() => Alert.alert('Reminders in Range', 'These are the scheduled reminders for the selected time window.')}
+                onPress={() => Alert.alert('Reminders in Range', 'These are the possible reminders for the selected time window.')}
                 style={{ marginLeft: 8, padding: 2 }}
                 accessibilityLabel="Information about reminders in range"
               >
@@ -733,24 +758,29 @@ function trapSafeScheduleNotificationAsync(opts) {
             {remindersInRange.length === 0 ? (
               <Text style={styles.minimalNote}>No reminders in this range.</Text>
             ) : (
-              remindersInRange.map((mins, idx) => (
-                <Text key={idx} style={styles.reminderTime}>
-                  {formatTime(Math.floor(mins / 60), mins % 60)}
-                </Text>
-              ))
+              <View style={{ flexDirection: "row", flexWrap: "wrap", width: "100%", justifyContent: "center", alignItems: "center", marginTop: 4 }}>
+                {remindersInRange.map((mins, idx) => (
+                  <Text style={styles.reminderTime} key={idx}>
+                    {formatTime(Math.floor(mins / 60), mins % 60)}
+                    {idx !== remindersInRange.length - 1 && <Text style={{ color: "#aaa" }}> | </Text>}
+                  </Text>
+                ))}
+              </View>
             )}
           </View>
           {/* Next scheduled reminders (for this meal only) */}
           <View style={[styles.reminderTimesBox, { marginTop: 6, marginBottom: 32 }]}>
             <Text style={styles.reminderListLabel}>Next Scheduled:</Text>
-            <NextScheduledReminders activeTab={activeTab} />
+            <View style={{width: "100%"}}>
+              <NextScheduledReminders activeTab={activeTab} />
+            </View>
             <View style={{ marginTop: 12 }}>
               <Button
                 title="Clear All Reminders"
                 onPress={() => {
                   Alert.alert(
-                    "Clear All Reminders",
-                    "Are you sure you want to delete all scheduled reminders?",
+                    `Clear All ${reminders.find(r => r.key === activeTab).label} Reminders`,
+                    `Are you sure you want to delete all ${reminders.find(r => r.key === activeTab).label} reminders?`,
                     [
                       { text: "No", style: "cancel" },
                       {
@@ -758,9 +788,24 @@ function trapSafeScheduleNotificationAsync(opts) {
                         style: "destructive",
                         onPress: async () => {
                           try {
-                            await Notifications.cancelAllScheduledNotificationsAsync();
+                            const all = await Notifications.getAllScheduledNotificationsAsync();
+                            const mealLabel = reminders.find(r => r.key === activeTab).label.toLowerCase();
+                            let deleted = 0;
+                            for (const n of all) {
+                              const title = n.content?.title?.toLowerCase() || "";
+                              const body = n.content?.body?.toLowerCase() || "";
+                              // Match ONLY meal reminders for this meal type; do NOT match "hydration" reminders
+                              if (
+                                (title.includes(mealLabel) || body.includes(mealLabel)) &&
+                                !title.includes("hydration") &&
+                                !body.includes("hydration")
+                              ) {
+                                await Notifications.cancelScheduledNotificationAsync(n.identifier);
+                                deleted++;
+                              }
+                            }
                             await refreshScheduledReminders();
-                            Alert.alert("All reminders cleared");
+                            Alert.alert(`${reminders.find(r => r.key === activeTab).label} reminders cleared`, `${deleted} reminder(s) removed.`);
                           } catch (e) {
                             Alert.alert("Error", "Failed to clear scheduled reminders: " + e.message);
                           }
@@ -799,17 +844,50 @@ function trapSafeScheduleNotificationAsync(opts) {
             {modalStep === "waterOffer" && (
               <>
                 <Text style={styles.reminderPrompt}>
-                  Would you like to be reminded to drink water every 2 hours until your next meal?
+                  Choose how often you'd like to be reminded to drink water:
                 </Text>
-                <View style={{ flexDirection: 'row', marginTop: 10 }}>
+                <View style={{ flexDirection: 'row', justifyContent: "center", gap: 8, marginBottom: 8 }}>
                   <Button
-                    title={isWaterSetting ? "Setting..." : "Yes"}
-                    onPress={() => scheduleWaterReminders(activeTab)}
+                    title="30 min"
+                    onPress={() => {
+                      setModalVisible(false);
+                      setWaterInterval(30);
+                      setTimeout(() => {
+                        scheduleWaterReminders(activeTab, 30);
+                        setWaterFromButton(false);
+                      }, 150);
+                    }}
                     disabled={isWaterSetting}
                   />
-                  <View style={{ width: 16 }} />
-                  <Button title="No" onPress={onDismissModal} />
+                  <Button
+                    title="1 hr"
+                    onPress={() => {
+                      setModalVisible(false);
+                      setWaterInterval(60);
+                      setTimeout(() => {
+                        scheduleWaterReminders(activeTab, 60);
+                        setWaterFromButton(false);
+                      }, 150);
+                    }}
+                    disabled={isWaterSetting}
+                  />
+                  <Button
+                    title="2 hr"
+                    onPress={() => {
+                      setModalVisible(false);
+                      setWaterInterval(120);
+                      setTimeout(() => {
+                        scheduleWaterReminders(activeTab, 120);
+                        setWaterFromButton(false);
+                      }, 150);
+                    }}
+                    disabled={isWaterSetting}
+                  />
                 </View>
+                <Button title="Cancel" onPress={() => {
+                  setModalVisible(false);
+                  setWaterFromButton(false);
+                }} />
               </>
             )}
             {modalStep === "suggestionOffer" && (
@@ -850,7 +928,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "flex-start",
     // Add +2cm (roughly 75.6px) to avoid camera cutout; fallback to current value if Platform is unknown
-    paddingTop: Platform.OS === "android" ? 32 + 76 : 52 + 76,
+    paddingTop: Platform.OS === "android" ? 70 : 90,
   },
   title: {
     fontSize: 30,
